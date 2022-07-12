@@ -64,7 +64,7 @@ wifi: #network to connect to
 captive_portal:
 
 web_server: #should have a local web server which displays info about sensors, logs, and stuff. wasnt working when I tested it. I don't use it for my application but you might find it interesting.  
-  port: 80
+  port: 80 #web server is availible at http://esp32_test_board.local/
   local: True
 
 status_led:
