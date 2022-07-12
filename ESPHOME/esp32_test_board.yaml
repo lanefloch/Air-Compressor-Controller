@@ -1,0 +1,213 @@
+esphome:
+  name: esp32_test_board
+  
+  on_boot: #reset everything
+    priority: 600
+    # ...
+    then:
+      - switch.turn_on: ac_relay
+      - switch.turn_off: drain_relay
+  
+  on_loop: 
+   - if: #turn off air compressor if it ran too long
+        condition:
+         for:
+          time: !lambda "return ac_max_runtime->state * 1000 * 60;" #1000 and 60 to convert from milliseconds to minutes
+          condition:
+           and:
+            - binary_sensor.is_on: compressor_on
+            - switch.is_on: ac_relay
+            - binary_sensor.is_off: ac_override
+        then:
+         - logger.log: Air Compressor Timed Out!
+         - switch.turn_off: ac_relay
+         
+         
+         
+     
+   - if: #turn off drain valve if it is on when shouldnt be. 
+        condition:
+         for:
+          time: 1min
+          condition:
+           and:
+            - switch.is_on: drain_relay
+        then:
+         - logger.log: Drain Relay Timed Out!
+         - switch.turn_off: drain_relay
+     
+
+
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+
+ota:
+  password: "4a019064a52158cd7629b4925a6aa0e5"
+
+wifi: #network to connect to
+  ssid: "blank" #enter your credentials here
+  password: "blank123" #and here
+  
+  ap: #in case esp is unable to connect to network, it will make its own AP and you can connect through that. 
+    ssid: "ESP32 Test Board"
+    ap_timeout: 10s
+
+captive_portal:
+
+web_server: #should have a local web server which displays info about sensors, logs, and stuff. wasnt working when I tested it. I don't use it for my application but you might find it interesting.  
+  port: 80
+  local: True
+
+status_led:
+  pin: GPIO2
+  
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    
+    on_time:
+      # Every morning @ 4:30 on weekdays
+      - seconds: 0
+        minutes: 30
+        hours: 4
+        days_of_week: MON-FRI
+        then:
+          if:
+            condition:
+            - binary_sensor.is_off: ac_override
+            then:
+            - switch.turn_on: ac_relay
+          
+      # Every night @ 8 on weekdays
+      - seconds: 0
+        minutes: 0
+        hours: 20
+        days_of_week: SUN-THU
+        then:
+          if:
+            condition:
+            - binary_sensor.is_off: ac_override
+            then:
+            - switch.turn_off: ac_relay
+          
+      # Every morning @ 6:30 on weekends
+      - seconds: 0
+        minutes: 30
+        hours: 6
+        days_of_week: SAT-SUN
+        then:
+          if:
+            condition:
+            - binary_sensor.is_off: ac_override
+            then:
+            - switch.turn_on: ac_relay
+          
+      # Every night @ 11:30 on weekends
+      - seconds: 0
+        minutes: 30
+        hours: 23
+        days_of_week: FRI-SAT
+        then:
+          if:
+            condition:
+            - binary_sensor.is_off: ac_override
+            then:
+            - switch.turn_off: ac_relay    
+
+dallas: #temp sensor
+  - pin: GPIO16
+    update_interval: 30s
+
+  
+switch:
+    
+  - platform: gpio
+    name: "Air_Compressor_Motor_Relay"
+    id: ac_relay
+    pin: GPIO4
+    
+  - platform: gpio
+    name: "Air_Compressor_Condensate_Drain_Relay"
+    id: drain_relay
+    pin: GPIO18
+
+binary_sensor: #input from my home assistant instance
+  - platform: homeassistant
+    id: ac_override
+    entity_id: input_boolean.air_compressor_override
+    name: "Air Compressor Override"
+  
+  - platform: analog_threshold
+    name: "Air Compressor on"
+    id: compressor_on
+    sensor_id: current
+    threshold: .5
+    on_release:
+     then:
+      - switch.turn_on: drain_relay
+      - delay: !lambda "return id(drain_runtime).state * 1000;" #1000 for milliseconds - seconds
+      - switch.turn_off: drain_relay    
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal Sensor"
+    update_interval: 60s
+    
+  - platform: homeassistant #input from my home assistant instance
+    id: ac_max_runtime
+    entity_id: counter.air_compressor_max_runtime
+    
+  - platform: homeassistant #input from my home assistant instance
+    id: drain_runtime
+    entity_id: counter.air_compressor_condensate_drain_on_time
+    
+  - platform: adc
+    pin: GPIO32
+    internal: true
+    id: adc_sensor
+    attenuation: 11db
+    
+  - platform: ct_clamp
+    id: current_transformer
+    internal: true
+    sensor: adc_sensor
+    name: "Air Compressor Measured Current"
+    sample_duration: 2.5s
+    update_interval: 5s
+    filters:
+      - calibrate_linear: #initial reading scaled to actual number taken by fluke ammeter. 
+          - 0.007 -> 0
+          - 0.143 -> 3.7
+          - 0.167 -> 4.2
+          - 0.502 -> 12.7
+  
+  - platform: template     # this will be the final current reading visible in the front end		
+    name: "Air Compressor Current"            
+    id: current
+    lambda: |-     # ignore readings below .5 Amps 
+      if (id(current_transformer).state > .5){ 
+        return (id(current_transformer).state);
+      } else {
+        return 0.0;
+      }
+    device_class: current
+    update_interval: 5s
+    accuracy_decimals: 2
+    unit_of_measurement: A  
+      
+  - platform: dallas #temp sensor
+    address: 0x9a062251d55b7f28
+    name: "Air Compressor PCB Temperature"
+    filters:
+    - offset: -1.7 # -1.7 degree celcius offset calibrated with laser temp gun.
+
+    
